@@ -8,10 +8,92 @@ const client = new MongoClient('mongodb://localhost:27017');
 
 const dbName = 'todo';
 
+// Auth
+const passport = require('passport');
+const LocalStrategy = require('passport-local');
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+app.use(
+  require('express-session')({
+    secret: 'The Todo API',
+    resave: true,
+    saveUninitialized: true,
+  })
+);
+app.use(passport.initialize());
+app.use(passport.session());
+
+passport.serializeUser(function (user, done) {
+  done(null, user._id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    await client.connect();
+    let db = client.db(dbName).collection('users');
+    let user = await db.findOne({ _id: ObjectId(id) });
+    done(null, user);
+  } catch (err) {
+    console.log(err);
+  }
+});
+
+passport.use(
+  new LocalStrategy(async (username, password, done) => {
+    let user;
+    try {
+      await client.connect();
+      let db = client.db(dbName).collection('users');
+      user = await db.findOne({ username: username });
+      if (!user || user.password !== password) {
+        client.close();
+        return done(null, false);
+      }
+    } catch (error) {
+      client.close();
+      console.log(error);
+      return done(error);
+    }
+    client.close();
+    return done(null, user);
+  })
+);
+
+app.post('/signup', async (req, res) => {
+  let user = {
+    name: req.body.name.trim(),
+    username: req.body.username.trim(),
+    password: req.body.password.trim(),
+  };
+
+  try {
+    await client.connect();
+    let db = client.db(dbName).collection('users');
+    let exist = await db.findOne({ username: user.username });
+    if (!exist) {
+      await db.insertOne(user);
+      // res.json('New User Added');
+      return res.redirect('/login');
+    }
+  } catch (err) {
+    client.close();
+    console.log(err);
+    return res.json('We encounter an issue, please try back later');
+  }
+});
+
+app.post(
+  '/login',
+  passport.authenticate('local', { failureRedirect: '/login' }),
+  async (req, res) => {
+    res.json('Sign in successfully!');
+  }
+);
 
 app.get('/', async (req, res) => {
+  console.log(req.headers);
+  console.log(req.user);
   let todos;
   try {
     await client.connect();
@@ -31,17 +113,18 @@ app.post('/', async (req, res) => {
     time: new Date(),
     val: req.body.todo.trim(),
   };
+  let todo;
   try {
     await client.connect();
     let db = client.db(dbName).collection('todos');
-    await db.insertOne(t);
+    todo = await db.insertOne(t);
   } catch (err) {
     client.close();
     console.log(err);
     return res.json("Couldn't add new todo");
   }
   client.close();
-  res.json('A new Todo was successfully added');
+  res.json(todo);
 });
 
 app.put('/:id', async (req, res) => {
@@ -91,6 +174,11 @@ app.delete('/:id', async (req, res) => {
   }
   client.close();
   res.json(`Todo with id ${req.params.id} deleted successfully`);
+});
+
+app.get('/logout', (req, res) => {
+  req.logOut();
+  res.json('User Logged out!');
 });
 
 app.listen(3000, () => {
